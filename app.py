@@ -1,8 +1,9 @@
 
-from flask import Flask, request, session, render_template_string
+from flask import Flask, request, session, render_template, render_template_string, send_file
 import numpy as np
 import secrets
 import hashlib
+import hmac
 import time
 
 app = Flask(__name__)
@@ -68,6 +69,10 @@ HTML = """
 <h1>Quantum CAPTCHA</h1>
 
 <p>
+    <a href="{{ url_for('home') }}">Back to BQSL home</a>
+</p>
+
+<p>
 Find the region containing the greatest probability
 density.
 </p>
@@ -81,6 +86,12 @@ Enter the region number:
 </p>
 
 <form method="POST">
+
+    <input
+        type="hidden"
+        name="csrf_token"
+        value="{{ csrf_token }}"
+    >
 
     <input
         type="number"
@@ -162,13 +173,11 @@ def quantum_captcha(seed):
     psi = np.exp(
         -(x - center) ** 2
         / (2 * width ** 2)
-    )
+    ).astype(complex)
 
     psi *= np.exp(
         1j * momentum * x
     )
-
-    psi = psi.astype(complex)
 
     # Normalize
     psi /= np.sqrt(
@@ -289,10 +298,31 @@ def make_wave(probability):
     return "".join(values)
 
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
+def home():
+    return send_file(
+        app.root_path + "/index.html"
+    )
+
+
+@app.route("/README.md", methods=["GET"])
+def readme():
+    return send_file(
+        app.root_path + "/README.md",
+        mimetype="text/plain"
+    )
+
+
+@app.route("/verify", methods=["GET", "POST"])
 def captcha():
 
     message = ""
+
+    csrf_token = session.get("csrf_token")
+
+    if not csrf_token:
+        csrf_token = secrets.token_urlsafe(32)
+        session["csrf_token"] = csrf_token
 
     # --------------------------------------------
     # Verify submitted answer
@@ -300,49 +330,66 @@ def captcha():
 
     if request.method == "POST":
 
-        submitted = request.form.get(
-            "answer",
+        submitted_token = request.form.get(
+            "csrf_token",
             ""
         )
 
-        correct = session.get(
-            "captcha_answer"
-        )
-
-        created = session.get(
-            "captcha_time",
-            0
-        )
-
-        # CAPTCHA expires after 2 minutes
-
-        if time.time() - created > 120:
-
-            message = "CAPTCHA expired."
-
-        elif submitted == str(correct):
-
-            message = (
-                "✓ Correct. Quantum verification passed."
-            )
-
-            # Destroy CAPTCHA so it can't be reused
-
-            session.pop(
-                "captcha_answer",
-                None
-            )
-
-            session.pop(
-                "captcha_time",
-                None
-            )
+        if not hmac.compare_digest(
+            submitted_token,
+            csrf_token
+        ):
+            message = "Invalid security token. Refresh and try again."
 
         else:
 
-            message = (
-                "✗ Incorrect. Try another CAPTCHA."
+            submitted = request.form.get(
+                "answer",
+                ""
             )
+
+            correct = session.get(
+                "captcha_answer"
+            )
+
+            created = session.get(
+                "captcha_time",
+                0
+            )
+
+            # CAPTCHA expires after 2 minutes
+
+            if time.time() - created > 120:
+
+                message = "CAPTCHA expired."
+
+            elif submitted == str(correct):
+
+                message = (
+                    "✓ Correct. Quantum verification passed."
+                )
+
+                # Destroy CAPTCHA so it can't be reused
+
+                session.pop(
+                    "captcha_answer",
+                    None
+                )
+
+                session.pop(
+                    "captcha_time",
+                    None
+                )
+
+                return render_template(
+                    "captcha_success.html"
+                )
+
+            else:
+
+                message = (
+                    "✗ Incorrect. Try another CAPTCHA."
+                )
 
     # --------------------------------------------
     # Create new CAPTCHA
@@ -358,6 +405,8 @@ def captcha():
 
         session["captcha_answer"] = answer
 
+        session["captcha_seed"] = seed
+
         session["captcha_time"] = time.time()
 
         wave = make_wave(probability)
@@ -366,9 +415,7 @@ def captcha():
 
         # Generate display from existing challenge
 
-        seed = str(
-            session["captcha_answer"]
-        )
+        seed = session["captcha_seed"]
 
         probability, _ = quantum_captcha(
             seed
@@ -379,7 +426,8 @@ def captcha():
     return render_template_string(
         HTML,
         wave=wave,
-        message=message
+        message=message,
+        csrf_token=csrf_token
     )
 
 
