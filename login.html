@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login | BQSL</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #050706;
+            --panel: #101b14;
+            --green: #72ff91;
+            --muted: #a9cdb0;
+            --line: #31583a;
+            --error: #ff8f8f;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            min-height: 100vh;
+            margin: 0;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: var(--bg);
+            color: var(--green);
+            font: 1rem/1.5 Arial, sans-serif;
+        }
+
+        main {
+            width: min(100%, 620px);
+            padding: 32px;
+            border: 1px solid var(--line);
+            background: var(--panel);
+        }
+
+        label {
+            display: block;
+            margin: 16px 0 6px;
+            color: var(--muted);
+        }
+
+        input,
+        textarea,
+        button {
+            width: 100%;
+            padding: 12px;
+            font: inherit;
+        }
+
+        input,
+        textarea {
+            border: 1px solid var(--line);
+            background: var(--bg);
+            color: white;
+        }
+
+        textarea {
+            resize: vertical;
+            font-family: monospace;
+        }
+
+        button {
+            margin-top: 22px;
+            border: 0;
+            background: var(--green);
+            color: var(--bg);
+            cursor: pointer;
+        }
+
+        a {
+            display: inline-block;
+            margin-top: 20px;
+            color: var(--muted);
+        }
+
+        .error { color: var(--error); }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>BQSL Login</h1>
+
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
+
+        {% if encrypted_message %}
+            <h2>GPG verification required</h2>
+            <p>
+                Decrypt the message with your local GPG software, then submit
+                the decrypted text below.
+            </p>
+
+            <textarea rows="14" readonly>{{ encrypted_message }}</textarea>
+
+            <form method="post" action="{{ url_for('verify_login') }}">
+                <label for="decrypted_message">Decrypted message</label>
+                <input id="decrypted_message"
+                       name="decrypted_message"
+                       autocomplete="off"
+                       required>
+                <button type="submit">Complete login</button>
+            </form>
+        {% else %}
+            <form method="post" action="{{ url_for('login') }}">
+                <label for="username">Username</label>
+                <input id="username"
+                       name="username"
+                       autocomplete="username"
+                       required>
+
+                <label for="password">Password</label>
+                <input id="password"
+                       name="password"
+                       type="password"
+                       autocomplete="current-password"
+                       required>
+
+                <button type="submit">Continue</button>
+            </form>
+        {% endif %}
+
+        <a href="{{ url_for('create_user') }}">Create an account</a>
+        <br>
+        <a href="{{ url_for('home') }}">Return home</a>
+    </main>
+</body>
+</html>

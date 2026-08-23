@@ -1,4 +1,10 @@
-from flask import Flask, jsonify, request, session, render_template, render_template_string, send_file
+from flask import (
+    Flask, jsonify, request, session, render_template,
+    render_template_string, send_file, redirect, url_for
+)
+import subprocess
+import tempfile
+from werkzeug.security import check_password_hash, generate_password_hash
 import numpy as np
 import secrets
 import hashlib
@@ -31,6 +37,19 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                public_key TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -533,9 +552,8 @@ def captcha():
                     session.pop("motion_speed", None)
                     session.pop("motion_phase", None)
 
-                    return render_template(
-                        "captcha_success.html"
-                    )
+                    session["captcha_verified"] = True
+                    return render_template("captcha_success.html")
 
                 message = "Missed alignment. Try again."
 
@@ -590,10 +608,123 @@ def captcha():
     )
 
 
-if __name__ == "__main__":
+@app.route("/create-user", methods=["GET", "POST"])
+def create_user():
+    if not session.get("captcha_verified"):
+        return redirect(url_for("captcha"))
 
-    app.run(
-        host="127.0.0.1",
-        port=5000,
-        debug=False
+    error = ""
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        confirmation = request.form.get("confirm_password", "")
+        public_key = request.form.get("public_key", "").strip()
+
+        if not all((username, email, password, public_key)):
+            error = "All fields are required."
+        elif password != confirmation:
+            error = "Passwords do not match."
+        else:
+            try:
+                # Validate that the submitted key is importable.
+                encrypt_gpg_message(public_key, "registration-check")
+
+                with get_db() as connection:
+                    connection.execute(
+                        """
+                        INSERT INTO users
+                            (username, email, password_hash, public_key)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            username,
+                            email,
+                            generate_password_hash(password),
+                            public_key,
+                        ),
+                    )
+
+                return redirect(url_for("login"))
+
+            except sqlite3.IntegrityError:
+                error = "Username or email is already registered."
+            except (ValueError, subprocess.SubprocessError, StopIteration):
+                error = "The GPG public key is invalid."
+
+    return render_template("create_user.html", error=error)
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not session.get("captcha_verified"):
+        return redirect(url_for("captcha"))
+
+    error = ""
+    encrypted_message = None
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+
+        with get_db() as connection:
+            user = connection.execute(
+                "SELECT * FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+
+        if not user or not check_password_hash(
+            user["password_hash"], password
+        ):
+            error = "Invalid username or password."
+        else:
+            challenge = secrets.token_urlsafe(32)
+            session["login_challenge"] = challenge
+            session["login_user_id"] = user["id"]
+            session["login_challenge_time"] = time.time()
+
+            try:
+                encrypted_message = encrypt_gpg_message(
+                    user["public_key"],
+                    challenge,
+                )
+            except (ValueError, subprocess.SubprocessError, StopIteration):
+                error = "Unable to create the GPG challenge."
+
+    return render_template(
+        "login.html",
+        error=error,
+        encrypted_message=encrypted_message,
     )
+
+
+@app.route("/login/verify", methods=["POST"])
+def verify_login():
+    if not session.get("captcha_verified"):
+        return redirect(url_for("captcha"))
+
+    expected = session.get("login_challenge")
+    submitted = request.form.get("decrypted_message", "").strip()
+    created = session.get("login_challenge_time", 0)
+
+    valid = (
+        expected
+        and time.time() - created <= 300
+        and hmac.compare_digest(submitted, expected)
+    )
+
+    if not valid:
+        return render_template(
+            "login.html",
+            error="The decrypted message is invalid or expired.",
+        ), 401
+
+    session["user_id"] = session.pop("login_user_id")
+    session.pop("login_challenge", None)
+    session.pop("login_challenge_time", None)
+
+    # Require a fresh CAPTCHA on the next login.
+    session.pop("captcha_verified", None)
+
+    return redirect(url_for("home"))
