@@ -1,15 +1,43 @@
-
-from flask import Flask, request, session, render_template, render_template_string, send_file
+from flask import Flask, jsonify, request, session, render_template, render_template_string, send_file
 import numpy as np
 import secrets
 import hashlib
 import hmac
+import os
+import sqlite3
 import time
 
 app = Flask(__name__)
 
 # Used to protect the Flask session
 app.secret_key = secrets.token_hex(32)
+app.config["DATABASE"] = os.environ.get(
+    "BQSL_DATABASE",
+    os.path.join(app.root_path, "members.db")
+)
+
+
+def get_db():
+    connection = sqlite3.connect(app.config["DATABASE"])
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def init_db():
+    with get_db() as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+
+init_db()
 
 
 HTML = """
@@ -66,7 +94,7 @@ HTML = """
 
 <div class="box">
 
-<h1>Quantum CAPTCHA</h1>
+<hi>Quantum CAPTCHA</hi>
 
 <p>
     <a href="{{ url_for('home') }}">Back to BQSL home</a>
@@ -115,6 +143,88 @@ Enter the region number:
 
 </div>
 
+</body>
+</html>
+"""
+
+
+HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantum CAPTCHA</title>
+    <style>
+        :root { color-scheme: dark; --ink: #07100b; --panel: #101b14; --line: #31583a; --signal: #72ff91; --quiet: #a9cdb0; }
+        * { box-sizing: border-box; }
+        body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 50% 20%, #193520, var(--ink) 62%); color: var(--signal); font-family: "Courier New", monospace; }
+        .box { width: min(760px, 100%); padding: clamp(24px, 6vw, 56px); border: 1px solid var(--line); background: rgba(16, 27, 20, .94); box-shadow: 0 24px 80px rgba(0, 0, 0, .35); }
+        a { color: var(--quiet); }
+        h1 { margin: 0; font-size: clamp(2rem, 7vw, 4.5rem); line-height: .95; letter-spacing: 0; }
+        .eyebrow { margin: 0 0 18px; color: var(--quiet); font-size: .75rem; letter-spacing: .16em; text-transform: uppercase; }
+        .prompt { margin: 28px 0 12px; color: #f1fff3; font-family: Georgia, serif; font-size: clamp(1.1rem, 3vw, 1.45rem); }
+        .arena { position: relative; height: 150px; margin: 28px 0 12px; border: 1px solid var(--line); background: linear-gradient(180deg, rgba(114, 255, 145, .04), rgba(114, 255, 145, .01)); overflow: hidden; cursor: crosshair; }
+        .arena::before { content: ""; position: absolute; top: 50%; left: 4%; right: 4%; border-top: 1px dashed #42734d; }
+        .dot { position: absolute; top: 50%; width: 18px; height: 18px; border-radius: 50%; transform: translate(-50%, -50%); }
+        .stationary { left: {{ target_position }}%; background: #fff; box-shadow: 0 0 8px #fff, 0 0 24px var(--signal); }
+        .moving { left: 4%; background: var(--signal); box-shadow: 0 0 8px var(--signal), 0 0 22px var(--signal); }
+        .readout { display: flex; justify-content: space-between; gap: 16px; color: var(--quiet); font-size: .75rem; }
+        .message { min-height: 1.5em; margin-top: 24px; color: #f1fff3; font-weight: 700; }
+        .back { display: inline-block; margin-top: 28px; }
+    </style>
+</head>
+<body>
+    <main class="box">
+        <p class="eyebrow">Wavefunction alignment protocol</p>
+        <h1>Catch the state.</h1>
+        <p class="prompt">Line up the green dot with the stationary white dot. Right-click at the exact moment they meet.</p>
+        <form id="captcha-form" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="click_x" id="click-x">
+            <input type="hidden" name="click_elapsed" id="click-elapsed">
+            <div class="arena" id="arena" aria-label="Moving quantum dot CAPTCHA">
+                <span class="dot stationary" aria-hidden="true"></span>
+                <span class="dot moving" id="moving-dot" aria-hidden="true"></span>
+            </div>
+        </form>
+        <div class="readout"><span>right-click to collapse</span><span id="timer">t = 0.00s</span></div>
+        <div class="message">{{ message }}</div>
+        <a class="back" href="{{ url_for('home') }}">Back to BQSL home</a>
+    </main>
+    <script>
+        const arena = document.getElementById("arena");
+        const movingDot = document.getElementById("moving-dot");
+        const form = document.getElementById("captcha-form");
+        const timer = document.getElementById("timer");
+        const startedAt = performance.now();
+        const speed = {{ motion_speed }};
+        const phase = {{ motion_phase }};
+
+        function positionAt(seconds) {
+            const cycle = (seconds * speed + phase) % 2;
+            const progress = cycle <= 1 ? cycle : 2 - cycle;
+            return 4 + progress * 92;
+        }
+
+        function animate(now) {
+            const elapsed = (now - startedAt) / 1000;
+            movingDot.style.left = positionAt(elapsed) + "%";
+            timer.textContent = "t = " + elapsed.toFixed(2) + "s";
+            requestAnimationFrame(animate);
+        }
+
+        arena.addEventListener("contextmenu", (event) => {
+            event.preventDefault();
+            const elapsed = (performance.now() - startedAt) / 1000;
+            const x = ((positionAt(elapsed) - 4) / 92) * 100;
+            document.getElementById("click-x").value = x.toFixed(4);
+            document.getElementById("click-elapsed").value = elapsed.toFixed(4);
+            form.submit();
+        });
+
+        requestAnimationFrame(animate);
+    </script>
 </body>
 </html>
 """
@@ -298,6 +408,45 @@ def make_wave(probability):
     return "".join(values)
 
 
+def motion_position(elapsed, speed, phase):
+    cycle = (elapsed * speed + phase) % 2
+    progress = cycle if cycle <= 1 else 2 - cycle
+    return 4 + progress * 92
+
+
+@app.route("/members", methods=["GET", "POST"])
+def members():
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        email = str(data.get("email", "")).strip().lower()
+
+        if not name or not email:
+            return jsonify({"error": "name and email are required"}), 400
+
+        try:
+            with get_db() as connection:
+                cursor = connection.execute(
+                    "INSERT INTO members (name, email) VALUES (?, ?)",
+                    (name, email)
+                )
+                member = connection.execute(
+                    "SELECT id, name, email, created_at FROM members WHERE id = ?",
+                    (cursor.lastrowid,)
+                ).fetchone()
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "email is already registered"}), 409
+
+        return jsonify(dict(member)), 201
+
+    with get_db() as connection:
+        member_rows = connection.execute(
+            "SELECT id, name, email, created_at FROM members ORDER BY id"
+        ).fetchall()
+
+    return jsonify([dict(member) for member in member_rows])
+
+
 @app.route("/", methods=["GET"])
 def home():
     return send_file(
@@ -343,15 +492,6 @@ def captcha():
 
         else:
 
-            submitted = request.form.get(
-                "answer",
-                ""
-            )
-
-            correct = session.get(
-                "captcha_answer"
-            )
-
             created = session.get(
                 "captcha_time",
                 0
@@ -363,33 +503,42 @@ def captcha():
 
                 message = "CAPTCHA expired."
 
-            elif submitted == str(correct):
-
-                message = (
-                    "✓ Correct. Quantum verification passed."
-                )
-
-                # Destroy CAPTCHA so it can't be reused
-
-                session.pop(
-                    "captcha_answer",
-                    None
-                )
-
-                session.pop(
-                    "captcha_time",
-                    None
-                )
-
-                return render_template(
-                    "captcha_success.html"
-                )
-
             else:
+                try:
+                    click_position = float(request.form.get("click_x", "nan"))
+                    click_elapsed = float(request.form.get("click_elapsed", "nan"))
+                except (TypeError, ValueError):
+                    click_position = float("nan")
+                    click_elapsed = float("nan")
 
-                message = (
-                    "✗ Incorrect. Try another CAPTCHA."
+                expected_position = motion_position(
+                    click_elapsed,
+                    session.get("motion_speed", 1),
+                    session.get("motion_phase", 0)
                 )
+
+                if (
+                    0 <= click_elapsed <= 120
+                    and abs(click_position - session.get("captcha_target", 50)) <= 6
+                    and abs(click_position - expected_position) <= 6
+                ):
+
+                    message = (
+                        "Correct. Quantum state aligned."
+                    )
+
+                    session.pop("captcha_answer", None)
+                    session.pop("captcha_time", None)
+                    session.pop("captcha_target", None)
+                    session.pop("motion_speed", None)
+                    session.pop("motion_phase", None)
+
+                    return render_template(
+                        "captcha_success.html"
+                    )
+
+                message = "Missed alignment. Try again."
+
 
     # --------------------------------------------
     # Create new CAPTCHA
@@ -409,6 +558,14 @@ def captcha():
 
         session["captcha_time"] = time.time()
 
+        session["captcha_target"] = (
+            4 + ((answer - 0.5) / 16) * 92
+        )
+
+        digest = hashlib.sha256(seed.encode()).digest()
+        session["motion_speed"] = 0.75 + (float(np.max(probability)) * 2)
+        session["motion_phase"] = int.from_bytes(digest[8:16], "big") / 2 ** 64
+
         wave = make_wave(probability)
 
     else:
@@ -425,7 +582,9 @@ def captcha():
 
     return render_template_string(
         HTML,
-        wave=wave,
+        target_position=session.get("captcha_target", 50),
+        motion_speed=session.get("motion_speed", 1),
+        motion_phase=session.get("motion_phase", 0),
         message=message,
         csrf_token=csrf_token
     )
