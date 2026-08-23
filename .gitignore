@@ -13,5 +13,8 @@ dist/
 # Backup files
 *~
 
+# Local SQLite data
+members.db
+
 # Undo-tree save-files
 *.~undo-tree

@@ -15,6 +15,25 @@ python -m venv .venv
 
 Open <http://127.0.0.1:5000> in a browser.
 
+## Members database
+
+The app uses SQLite for member records. By default, the database is stored in
+`members.db` at the project root. Set `BQSL_DATABASE` to use another path.
+
+List members:
+
+```text
+curl http://127.0.0.1:5000/members
+```
+
+Add a member:
+
+```text
+curl -X POST http://127.0.0.1:5000/members \
+	-H 'Content-Type: application/json' \
+	-d '{"name":"Ada Lovelace","email":"ada@example.com"}'
+```
+
 ## Bitcoin verification direction
 
 The next layer should be a separate API that accepts public Bitcoin data and
