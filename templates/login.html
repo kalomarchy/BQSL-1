@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BQSL Login</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #050706;
+            --panel: #101b14;
+            --line: #31583a;
+            --accent: #72ff91;
+            --text: #f1fff3;
+            --muted: #a9cdb0;
+            --error: #ff8f8f;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            min-height: 100vh;
+            margin: 0;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: radial-gradient(circle at top, #193520, var(--bg) 65%);
+            color: var(--text);
+            font: 16px/1.5 system-ui, sans-serif;
+        }
+
+        main {
+            width: min(100%, 620px);
+            padding: 32px;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: rgb(16 27 20 / 94%);
+            box-shadow: 0 24px 80px rgb(0 0 0 / 35%);
+        }
+
+        h1, h2 { color: var(--accent); }
+        label { display: block; margin-top: 18px; color: var(--muted); }
+
+        input,
+        textarea,
+        button {
+            width: 100%;
+            margin-top: 6px;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            font: inherit;
+        }
+
+        input,
+        textarea {
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        textarea {
+            min-height: 180px;
+            resize: vertical;
+            font-family: monospace;
+        }
+
+        button {
+            margin-top: 24px;
+            background: var(--accent);
+            color: var(--bg);
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        button:hover,
+        button:focus-visible {
+            filter: brightness(1.12);
+        }
+
+        a {
+            color: var(--accent);
+        }
+
+        .error {
+            color: var(--error);
+        }
+
+        .hint {
+            color: var(--muted);
+            font-size: .92rem;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>BQSL Login</h1>
+
+        {% if error %}
+            <p class="error" role="alert">{{ error }}</p>
+        {% endif %}
+
+        {% if encrypted_message %}
+            <h2>Decrypt your GPG challenge</h2>
+            <p class="hint">
+                Copy this message, decrypt it with your local GPG software,
+                and submit the plaintext below.
+            </p>
+
+            <textarea
+                readonly
+                aria-label="Encrypted GPG challenge"
+            >{{ encrypted_message }}</textarea>
+
+            <form method="post" action="{{ url_for('verify_login') }}">
+                <label for="decrypted_message">Decrypted message</label>
+                <input
+                    id="decrypted_message"
+                    name="decrypted_message"
+                    autocomplete="off"
+                    required
+                >
+                <button type="submit">Complete login</button>
+            </form>
+        {% else %}
+            <form method="post" action="{{ url_for('login') }}">
+                <label for="username">Username</label>
+                <input
+                    id="username"
+                    name="username"
+                    autocomplete="username"
+                    required
+                >
+
+                <label for="password">Password</label>
+                <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    autocomplete="current-password"
+                    required
+                >
+
+                <button type="submit">Continue</button>
+            </form>
+        {% endif %}
+
+        <p>
+            <a href="{{ url_for('create_user') }}">Create an account</a>
+        </p>
+        <p>
+            <a href="{{ url_for('home') }}">Return home</a>
+        </p>
+    </main>
+</body>
+</html>

@@ -1,0 +1,46 @@
+<?php
+// filepath: /workspaces/BQSL/create-user.php
+declare(strict_types=1);
+
+require __DIR__ . '/config.php';
+require_captcha();
+
+$error = '';
+$encryptedMessage = null;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $username = trim($_POST['username'] ?? '');
+    $email = strtolower(trim($_POST['email'] ?? ''));
+    $password = $_POST['password'] ?? '';
+    $confirmation = $_POST['confirm_password'] ?? '';
+    $publicKey = trim($_POST['public_key'] ?? '');
+
+    if ($username === '' || $email === '' || $password === '' ||
+        $confirmation === '' || $publicKey === '') {
+        $error = 'All fields are required.';
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $error = 'Enter a valid email address.';
+    } elseif ($password !== $confirmation) {
+        $error = 'Passwords do not match.';
+    } elseif (str_contains($publicKey, 'BEGIN PGP PRIVATE KEY BLOCK')) {
+        $error = 'Only a GPG public key may be submitted.';
+    } else {
+        try {
+            $challenge = bin2hex(random_bytes(32));
+            $encryptedMessage = encrypt_gpg_message($publicKey, $challenge);
+
+            $_SESSION['registration'] = [
+                'username' => $username,
+                'email' => $email,
+                'password_hash' => password_hash($password, PASSWORD_DEFAULT),
+                'public_key' => $publicKey,
+                'challenge_hash' => hash('sha256', $challenge),
+                'expires' => time() + 300,
+            ];
+        } catch (Throwable) {
+            $error = 'The GPG public key is invalid or could not be encrypted.';
+        }
+    }
+}
+
+require __DIR__ . '/templates/create_user.php';

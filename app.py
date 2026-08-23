@@ -16,7 +16,10 @@ import time
 app = Flask(__name__)
 
 # Used to protect the Flask session
-app.secret_key = secrets.token_hex(32)
+app.secret_key = os.environ.get(
+    "BQSL_SECRET_KEY",
+    "development-only-change-this-secret",
+)
 app.config["DATABASE"] = os.environ.get(
     "BQSL_DATABASE",
     os.path.join(app.root_path, "members.db")
@@ -51,6 +54,20 @@ def init_db():
                 password_hash TEXT NOT NULL,
                 public_key TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_registrations (
+                token TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                email TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                public_key TEXT NOT NULL,
+                challenge_hash TEXT NOT NULL,
+                expires_at REAL NOT NULL
             )
             """
         )
@@ -613,47 +630,143 @@ def create_user():
     if not session.get("captcha_verified"):
         return redirect(url_for("captcha"))
 
-    error = ""
+    if request.method == "GET":
+        return render_template("create_user.html")
 
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        email = request.form.get("email", "").strip().lower()
-        password = request.form.get("password", "")
-        confirmation = request.form.get("confirm_password", "")
-        public_key = request.form.get("public_key", "").strip()
+    username = request.form.get("username", "").strip()
+    email = request.form.get("email", "").strip().lower()
+    password = request.form.get("password", "")
+    confirmation = request.form.get("confirm_password", "")
+    public_key = request.form.get("public_key", "").strip()
 
-        if not all((username, email, password, public_key)):
-            error = "All fields are required."
-        elif password != confirmation:
-            error = "Passwords do not match."
-        else:
-            try:
-                # Validate that the submitted key is importable.
-                encrypt_gpg_message(public_key, "registration-check")
+    if not all((username, email, password, confirmation, public_key)):
+        return render_template(
+            "create_user.html",
+            error="All fields are required.",
+        )
 
-                with get_db() as connection:
-                    connection.execute(
-                        """
-                        INSERT INTO users
-                            (username, email, password_hash, public_key)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (
-                            username,
-                            email,
-                            generate_password_hash(password),
-                            public_key,
-                        ),
-                    )
+    if password != confirmation:
+        return render_template(
+            "create_user.html",
+            error="Passwords do not match.",
+        )
 
-                return redirect(url_for("login"))
+    try:
+        challenge = secrets.token_urlsafe(32)
+        encrypted_message = encrypt_gpg_message(public_key, challenge)
+    except (ValueError, StopIteration, subprocess.SubprocessError):
+        return render_template(
+            "create_user.html",
+            error="The GPG public key is invalid.",
+        )
 
-            except sqlite3.IntegrityError:
-                error = "Username or email is already registered."
-            except (ValueError, subprocess.SubprocessError, StopIteration):
-                error = "The GPG public key is invalid."
+    token = secrets.token_urlsafe(32)
 
-    return render_template("create_user.html", error=error)
+    with get_db() as connection:
+        connection.execute(
+            """
+            DELETE FROM pending_registrations
+            WHERE expires_at < ?
+            """,
+            (time.time(),),
+        )
+        connection.execute(
+            """
+            INSERT INTO pending_registrations
+            (token, username, email, password_hash, public_key,
+             challenge_hash, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                token,
+                username,
+                email,
+                generate_password_hash(password),
+                public_key,
+                hashlib.sha256(challenge.encode()).hexdigest(),
+                time.time() + 300,
+            ),
+        )
+
+    session["registration_token"] = token
+
+    return render_template(
+        "create_user.html",
+        encrypted_message=encrypted_message,
+    )
+
+
+@app.route("/create-user/verify", methods=["POST"])
+def verify_registration():
+    if not session.get("captcha_verified"):
+        return redirect(url_for("captcha"))
+
+    token = session.pop("registration_token", None)
+    submitted = request.form.get("decrypted_message", "").strip()
+
+    if not token:
+        return render_template(
+            "create_user.html",
+            error="Registration has expired. Please start again.",
+        ), 400
+
+    with get_db() as connection:
+        pending = connection.execute(
+            """
+            SELECT * FROM pending_registrations
+            WHERE token = ? AND expires_at > ?
+            """,
+            (token, time.time()),
+        ).fetchone()
+
+        if not pending:
+            return render_template(
+                "create_user.html",
+                error="Registration has expired. Please start again.",
+            ), 400
+
+        submitted_hash = hashlib.sha256(
+            submitted.encode()
+        ).hexdigest()
+
+        if not hmac.compare_digest(
+            submitted_hash, pending["challenge_hash"]
+        ):
+            return render_template(
+                "create_user.html",
+                error="The decrypted GPG message is incorrect.",
+            ), 401
+
+        try:
+            connection.execute(
+                """
+                INSERT INTO users
+                (username, email, password_hash, public_key)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    pending["username"],
+                    pending["email"],
+                    pending["password_hash"],
+                    pending["public_key"],
+                ),
+            )
+        except sqlite3.IntegrityError:
+            connection.execute(
+                "DELETE FROM pending_registrations WHERE token = ?",
+                (token,),
+            )
+            return render_template(
+                "create_user.html",
+                error="Username or email is already registered.",
+            ), 409
+
+        connection.execute(
+            "DELETE FROM pending_registrations WHERE token = ?",
+            (token,),
+        )
+
+    return redirect(url_for("login"))
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -728,3 +841,76 @@ def verify_login():
     session.pop("captcha_verified", None)
 
     return redirect(url_for("home"))
+
+
+def encrypt_gpg_message(public_key, message):
+    """Encrypt message with an armored public GPG key."""
+    if (
+        "-----BEGIN PGP PUBLIC KEY BLOCK-----" not in public_key
+        or "-----END PGP PUBLIC KEY BLOCK-----" not in public_key
+        or "-----BEGIN PGP PRIVATE KEY BLOCK-----" in public_key
+    ):
+        raise ValueError("A valid public GPG key is required.")
+
+    with tempfile.TemporaryDirectory(prefix="bqsl-gpg-") as home:
+        os.chmod(home, 0o700)
+        key_file = os.path.join(home, "public-key.asc")
+
+        with open(key_file, "w", encoding="utf-8") as file:
+            file.write(public_key)
+
+        base = [
+            "gpg",
+            "--batch",
+            "--no-options",
+            "--no-auto-check-trustdb",
+            "--homedir",
+            home,
+        ]
+
+        subprocess.run(
+            [*base, "--import", key_file],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        listing = subprocess.run(
+            [*base, "--with-colons", "--list-keys"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+
+        fingerprint = next(
+            fields[9]
+            for line in listing.splitlines()
+            if line.startswith("fpr:")
+            and len((fields := line.split(":"))) > 9
+            and fields[9]
+        )
+
+        result = subprocess.run(
+            [
+                *base,
+                "--trust-model",
+                "always",
+                "--armor",
+                "--encrypt",
+                "--recipient",
+                fingerprint,
+            ],
+            input=message,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        return result.stdout
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

@@ -13,24 +13,32 @@
             color: #f5fff6;
             font: 1rem/1.6 "Courier New", monospace;
         }
-        h1, a { color: #6dff8b; }
+        h1 { color: #6dff8b; }
         .warning {
             padding: 1rem;
             border: 1px solid #d66;
             color: #ffaaaa;
         }
+        a { color: #6dff8b; }
     </style>
 </head>
 <body>
     <main>
         <p>BQSL / key safety</p>
         <h1>Private keys stay private.</h1>
+
         <p class="warning">
             Never enter a Bitcoin recovery phrase, private key, or wallet password
             into this website. BQSL does not collect or hash recovery phrases.
         </p>
-        <p>Use only public keys, fingerprints, or Bitcoin addresses for verification.</p>
-        <p><a href="index.html">Return home</a></p>
+
+        <p>
+            For account verification, use a GPG public-key fingerprint or a
+            Bitcoin address. Keep the corresponding private material offline and
+            backed up securely.
+        </p>
+
+        <p><a href="index.html">Return to the front page</a></p>
     </main>
 </body>
 </html>
