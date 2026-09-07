@@ -1,5 +1,5 @@
 # BQSL
-Bitcoin Quantum Superposition Layer/v1.0
+Bitcoin Quantum Superposition Layer/v1.2.0
 
 BQSL is currently a Flask prototype that presents a deterministic numerical
 wave CAPTCHA. Passing the CAPTCHA only verifies that the user solved the
